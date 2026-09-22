@@ -2,7 +2,6 @@ from ircrobots import Bot as BaseBot, Server as BaseServer, ConnectionParams
 from irctokens import build, Line
 from aikta.sqlite import Storage
 from aikta.settings import SERVER, PORT, NICK, LASTFM_API_KEY, CHANNELS, DATA_DIR, CMD_DEFAULT_ON, ADMIN
-from aikta.archivebot import ArchiveBot
 from aikta.lastfm import LastFM
 import asyncio
 import aiohttp
@@ -14,8 +13,7 @@ class Server(BaseServer):
         super().__init__(*a, **kw)
         self.storage = Storage(db=Path(DATA_DIR) / "aikta.db")
         self.lastfm = LastFM(LASTFM_API_KEY, self.storage)
-        self.archivebot = ArchiveBot()
-        
+
         # Parse multiple extra commands
         self.extra_commands = {}
         extra_config = os.getenv("EXTRA_COMMANDS", "")
@@ -75,19 +73,6 @@ class Server(BaseServer):
             await self.send(build("PRIVMSG", [target, result]))
             await asyncio.sleep(1.0)
     
-    async def _handle_ab(self, target, msg):
-        args = msg.split()[1:]
-        if not args:
-            await self.send(build("PRIVMSG", [target, "usage: !ab <link|domain>"]))
-            return
-        from aikta.archivebot import extract_domain
-        domain = extract_domain(args[0])
-        if not domain:
-            await self.send(build("PRIVMSG", [target, "usage: !ab <link|domain>"]))
-            return
-        result = await self.archivebot.lookup(domain)
-        await self.send(build("PRIVMSG", [target, result]))
-
     async def _handle_version(self, target):
         version_file = Path("/app/.venv/.git_commit")
         version = version_file.read_text().strip() if version_file.exists() else "idk (file not found)"
