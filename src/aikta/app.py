@@ -1,7 +1,8 @@
 from ircrobots import Bot as BaseBot, Server as BaseServer, ConnectionParams
 from irctokens import build, Line
 from aikta.sqlite import Storage
-from aikta.settings import SERVER, PORT, NICK, LASTFM_API_KEY, CHANNELS, DATA_DIR
+from aikta.settings import SERVER, PORT, NICK, LASTFM_API_KEY, CHANNELS, DATA_DIR, CMD_DEFAULT_ON, ADMIN
+from aikta.archivebot import ArchiveBot
 from aikta.lastfm import LastFM
 import asyncio
 import aiohttp
@@ -13,6 +14,7 @@ class Server(BaseServer):
         super().__init__(*a, **kw)
         self.storage = Storage(db=Path(DATA_DIR) / "aikta.db")
         self.lastfm = LastFM(LASTFM_API_KEY, self.storage)
+        self.archivebot = ArchiveBot()
         
         # Parse multiple extra commands
         self.extra_commands = {}
@@ -25,7 +27,8 @@ class Server(BaseServer):
                     api = parts[1].strip()
                     transform = parts[2].strip() if len(parts) > 2 else ""
                     self.extra_commands[cmd] = {"api": api, "transform": transform}
-    
+        self.builtin_commands = {"np", "wp", "v"}
+
     async def line_read(self, line: Line):
         print(f"{self.name} < {line.format()}")
         match line.command:
@@ -37,12 +40,19 @@ class Server(BaseServer):
                 target, msg = line.params[:2]
                 nick = line.source.split("!")[0]
                 cmd = msg.split()[0].lower()
-                
+
                 match cmd:
-                    case ".np": await self._handle_np(target, nick, msg)
-                    case ".wp": await self._handle_wp(target)
-                    case ".v": await self._handle_version(target)
-                    case _ if cmd in self.extra_commands:
+                    case ".cmd-on" | "!cmd-on":
+                        await self._handle_cmd_toggle(target, nick, msg, True)
+                    case ".cmd-off" | "!cmd-off":
+                        await self._handle_cmd_toggle(target, nick, msg, False)
+                    case ".np" if await self._cmd_enabled(target, "np"):
+                        await self._handle_np(target, nick, msg)
+                    case ".wp" if await self._cmd_enabled(target, "wp"):
+                        await self._handle_wp(target)
+                    case ".v" if await self._cmd_enabled(target, "v"):
+                        await self._handle_version(target)
+                    case _ if cmd in self.extra_commands and await self._cmd_enabled(target, cmd.lstrip(".!")):
                         await self._handle_extra(target, cmd)
     
     async def _handle_np(self, target, nick, msg):
@@ -65,6 +75,19 @@ class Server(BaseServer):
             await self.send(build("PRIVMSG", [target, result]))
             await asyncio.sleep(1.0)
     
+    async def _handle_ab(self, target, msg):
+        args = msg.split()[1:]
+        if not args:
+            await self.send(build("PRIVMSG", [target, "usage: !ab <link|domain>"]))
+            return
+        from aikta.archivebot import extract_domain
+        domain = extract_domain(args[0])
+        if not domain:
+            await self.send(build("PRIVMSG", [target, "usage: !ab <link|domain>"]))
+            return
+        result = await self.archivebot.lookup(domain)
+        await self.send(build("PRIVMSG", [target, result]))
+
     async def _handle_version(self, target):
         version_file = Path("/app/.venv/.git_commit")
         version = version_file.read_text().strip() if version_file.exists() else "idk (file not found)"
@@ -94,7 +117,48 @@ class Server(BaseServer):
                     await self.send(build("PRIVMSG", [target, str(result)]))
         except:
             pass
-    
+
+    def _known_commands(self):
+        return self.builtin_commands | set(self.extra_commands)
+
+    async def _cmd_enabled(self, target, cmd):
+        # private messages are not per-channel; policy applies to channels only
+        if not target.startswith("#"):
+            return True
+        raw = await self.storage.read(f"cmdchan:{target.lower()}")
+        overrides = set(raw.split(",")) if raw else set()
+        # overrides hold names that differ from the configured default policy
+        return (cmd in overrides) if not CMD_DEFAULT_ON else (cmd not in overrides)
+
+    def _is_op(self, target, nick):
+        if ADMIN and nick.lower() == ADMIN.lower():
+            return True
+        channel = self.channels.get(target)
+        user = channel.users.get(self.casefold(nick)) if channel else None
+        return bool(user and user.modes & set("oOaq"))
+
+    async def _handle_cmd_toggle(self, target, nick, msg, enable):
+        # unauthorized or private-message toggles are ignored silently
+        if not target.startswith("#") or not self._is_op(target, nick):
+            return
+        args = msg.split()[1:]
+        name = args[0].lstrip(".!").lower() if args else ""
+        if name not in self._known_commands():
+            return await self.send(build("PRIVMSG", [target, f"{nick}: unknown command: {name or '(none)'}"]))
+        key = f"cmdchan:{target.lower()}"
+        raw = await self.storage.read(key)
+        overrides = set(raw.split(",")) if raw else set()
+        if enable != CMD_DEFAULT_ON:
+            overrides.add(name)
+        else:
+            overrides.discard(name)
+        if overrides:
+            await self.storage.write(key, ",".join(sorted(overrides)))
+        else:
+            await self.storage.delete(key)
+        resp = f"{nick}: {name} {'enabled' if enable else 'disabled'} in {target}"
+        await self.send(build("PRIVMSG", [target, resp]))
+
     async def line_send(self, line: Line):
         print(f"{self.name} > {line.format()}")
 
