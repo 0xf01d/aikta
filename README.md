@@ -11,6 +11,10 @@ irc bot for me
 
 sqlite
 
+## per-channel commands
+
+every command can be enabled/disabled per channel with `.cmd-on <command>` / `.cmd-off <command>` (channel ops, or the `AIKTA_ADMIN` nick). default policy comes from `AIKTA_CMD_DEFAULT` (`on` = all enabled unless disabled per channel, `off` = all disabled unless enabled per channel). toggles persist in sqlite and apply immediately. disabled commands are ignored silently.
+
 ## requirements
 
 oci, python 3.13+, uv, asyncio, aiohttp, aiosqlite
