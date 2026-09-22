@@ -6,6 +6,7 @@ irc bot for me
 
 1. .np - last.fm (now playin)
 2. .wp - last.fm for the channel (we playin)
+3. !ab - archivebot lookup for a domain or link (last job, shallow, subdomains)
 
 ## how it stores data
 
