@@ -71,7 +71,8 @@ class Server(BaseServer):
     async def _handle_ab(self, target, nick, msg):
         args = msg.split()[1:]
         if not args:
-            return await self.send(build("PRIVMSG", [target, f"{nick}: usage: !ab <link|domain>"]))
+            usage = f"{nick}: usage: !ab <link|domain>"
+            return await self.send(build("PRIVMSG", [target, usage]))
         report = await self.archivebot.get_domain_report(extract_domain(args[0]))
         await self.send(build("PRIVMSG", [target, report]))
 
