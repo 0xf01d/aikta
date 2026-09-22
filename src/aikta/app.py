@@ -3,6 +3,7 @@ from irctokens import build, Line
 from aikta.sqlite import Storage
 from aikta.settings import SERVER, PORT, NICK, LASTFM_API_KEY, CHANNELS, DATA_DIR, CMD_DEFAULT_ON, ADMIN
 from aikta.lastfm import LastFM
+from aikta.archivebot import ArchiveBot, extract_domain
 import asyncio
 import aiohttp
 import os
@@ -13,6 +14,7 @@ class Server(BaseServer):
         super().__init__(*a, **kw)
         self.storage = Storage(db=Path(DATA_DIR) / "aikta.db")
         self.lastfm = LastFM(LASTFM_API_KEY, self.storage)
+        self.archivebot = ArchiveBot()
 
         # Parse multiple extra commands
         self.extra_commands = {}
@@ -25,7 +27,7 @@ class Server(BaseServer):
                     api = parts[1].strip()
                     transform = parts[2].strip() if len(parts) > 2 else ""
                     self.extra_commands[cmd] = {"api": api, "transform": transform}
-        self.builtin_commands = {"np", "wp", "v"}
+        self.builtin_commands = {"np", "wp", "v", "ab"}
 
     async def line_read(self, line: Line):
         print(f"{self.name} < {line.format()}")
@@ -50,6 +52,8 @@ class Server(BaseServer):
                         await self._handle_wp(target)
                     case ".v" if await self._cmd_enabled(target, "v"):
                         await self._handle_version(target)
+                    case "!ab" | ".ab" if await self._cmd_enabled(target, "ab"):
+                        await self._handle_ab(target, nick, msg)
                     case _ if cmd in self.extra_commands and await self._cmd_enabled(target, cmd.lstrip(".!")):
                         await self._handle_extra(target, cmd)
     
@@ -64,6 +68,14 @@ class Server(BaseServer):
         resp = data["formatted"] if data and data["song"]["artist"] else f"{nick}: No recent track found."
         await self.send(build("PRIVMSG", [target, resp]))
     
+    async def _handle_ab(self, target, nick, msg):
+        args = msg.split()[1:]
+        if not args:
+            usage = f"{nick}: usage: !ab <link|domain>"
+            return await self.send(build("PRIVMSG", [target, usage]))
+        report = await self.archivebot.get_domain_report(extract_domain(args[0]))
+        await self.send(build("PRIVMSG", [target, report]))
+
     async def _handle_wp(self, target):
         if not (channel := self.channels.get(target)):
             return
